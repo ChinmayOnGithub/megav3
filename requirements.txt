@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+numpy
+requests
+psutil
+pydantic
+kubernetes
+httpx
+tenacity
+nvidia-ml-py3
+cupy-cuda12x

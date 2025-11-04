@@ -1,0 +1,19 @@
+UserScale: GPU-Aware Kubernetes Autoscaler
+===========================================
+
+QUICK START:
+1. python3 verify_gpu.py
+2. python3 setup.py
+3. python3 demo.py
+4. python3 monitor.py
+
+CLEANUP:
+python3 setup.py --cleanup
+
+MINIKUBE PERSISTENT GPU:
+minikube start --driver=docker --cpus=2 --memory=2048 --docker-opt=default-runtime=nvidia
+
+MONITORING:
+watch -n 1 nvidia-smi
+kubectl get pods -n userscale -w
+kubectl logs -n userscale deployment/userscale-scaler -f

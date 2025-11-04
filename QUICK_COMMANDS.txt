@@ -1,0 +1,105 @@
+================================================================================
+QUICK COMMAND REFERENCE - GPU KUBERNETES AUTOSCALER
+================================================================================
+
+PROJECT PATH:
+cd "/home/chinmay/Development/GitHub Repos/Mega_Project_SEMVII_version2"
+
+================================================================================
+ESSENTIAL PRE-CHECKS (Run these first)
+================================================================================
+
+nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi
+minikube version
+kubectl version --client
+python3 --version
+
+================================================================================
+SETUP PYTHON ENVIRONMENT (One-time setup)
+================================================================================
+
+sudo python3 -m venv /usr/local/pyenv
+sudo chown -R $USER:$USER /usr/local/pyenv
+source /usr/local/pyenv/bin/activate
+pip install --upgrade pip
+pip install nvidia-ml-py3 cupy-cuda12x fastapi uvicorn numpy requests psutil pydantic kubernetes httpx tenacity
+
+================================================================================
+VERIFY GPU STACK
+================================================================================
+
+python3 verify_gpu.py
+
+Expected: All PASS
+
+================================================================================
+DEPLOY TO KUBERNETES
+================================================================================
+
+python3 setup.py
+
+Wait for completion (~10 minutes for first run)
+
+================================================================================
+VERIFY DEPLOYMENT
+================================================================================
+
+kubectl get pods -n userscale
+kubectl get pods -n hpa
+curl http://localhost:8001/healthz
+curl http://localhost:8002/healthz
+
+================================================================================
+RUN DEMO (Main Terminal)
+================================================================================
+
+python3 demo.py
+
+Runs for 5 minutes, generates GPU load
+
+================================================================================
+MONITORING (Open in separate terminals)
+================================================================================
+
+Terminal 1: watch -n 1 nvidia-smi
+Terminal 2: watch -n 1 "kubectl get pods -n userscale && echo && kubectl get pods -n hpa"
+Terminal 3: python3 monitor.py
+
+================================================================================
+VALIDATION COMMANDS
+================================================================================
+
+kubectl get hpa -n hpa -o wide
+kubectl logs -n userscale -l app=userscale-scaler --tail=50
+curl http://localhost:8001/metrics | jq .
+
+================================================================================
+CLEANUP
+================================================================================
+
+python3 setup.py --cleanup
+minikube stop
+minikube delete
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+# Kill port forwards
+pkill -f 'kubectl port-forward'
+
+# Check pod status
+kubectl describe pod <pod-name> -n userscale
+
+# Check events
+kubectl get events -n userscale --sort-by='.lastTimestamp'
+
+# Check logs
+kubectl logs -n userscale -l app=userscale-app --tail=100
+
+# Restart Minikube
+minikube delete
+python3 setup.py
+
+================================================================================

@@ -1,0 +1,116 @@
+================================================================================
+PERMANENT GPU AUTOSCALER SETUP - NO REBUILD NEEDED
+================================================================================
+
+Project: /home/chinmay/Development/GitHub Repos/Mega_Project_SEMVII_version2
+System: Arch Linux + RTX 3050 Laptop GPU
+
+Changes Made:
+✅ Dockerfile.gpu - All dependencies installed at BUILD time (no runtime install)
+✅ setup.py - Builds in Minikube Docker daemon (no image transfer)
+✅ K8s manifests - imagePullPolicy: Never (uses local image)
+✅ Image cached permanently - survives pod restarts and laptop sleep
+
+================================================================================
+STEP 1: ONE-TIME BUILD (15-20 minutes first time)
+================================================================================
+
+cd /home/it/Desktop/Mega_Project_SEMVII/
+
+# Start Minikube (if not running)
+minikube start --driver=docker --memory=4096 --cpus=2
+
+# Configure shell to use Minikube's Docker daemon
+eval $(minikube -p minikube docker-env)
+
+# Build image ONCE (all dependencies baked in)
+docker build -f Dockerfile.gpu -t userscale-gpu:latest .
+
+# Verify image exists
+docker images | grep userscale-gpu
+
+Expected output:
+userscale-gpu    latest    <image-id>    <time>    ~2GB
+
+================================================================================
+STEP 2: DEPLOY TO KUBERNETES (2-3 minutes)
+================================================================================
+
+# Deploy resources
+python3 setup.py
+
+Expected:
+- Skips build (image already exists)
+- Deploys UserScale and HPA
+- Sets up port forwarding
+
+================================================================================
+STEP 3: RUN DEMO (5 minutes)
+================================================================================
+
+# Terminal 1: Watch GPU
+watch -n 1 nvidia-smi
+
+# Terminal 2: Watch Pods
+watch -n 1 "kubectl get pods -n userscale"
+
+# Terminal 3: Monitor Dashboard
+python3 monitor.py
+
+# Terminal 4: Run Demo
+python3 demo.py
+
+================================================================================
+PERMANENT SETUP - NO CLEANUP NEEDED
+================================================================================
+
+After first build, you can:
+
+✅ Run demo.py multiple times - NO rebuild
+✅ Restart pods - NO re-download
+✅ Suspend/resume laptop - Image persists
+✅ Restart Minikube - Image persists
+
+To run demo again:
+    python3 demo.py
+
+To restart services (if needed):
+    kubectl rollout restart deployment/userscale-app -n userscale
+    kubectl rollout restart deployment/hpa-app -n userscale
+
+To check image:
+    eval $(minikube docker-env)
+    docker images | grep userscale-gpu
+
+================================================================================
+REBUILD ONLY IF CODE CHANGES
+================================================================================
+
+If you modify app/ or scaler/ code:
+
+eval $(minikube docker-env)
+docker build -f Dockerfile.gpu -t userscale-gpu:latest .
+kubectl rollout restart deployment/userscale-app -n userscale
+kubectl rollout restart deployment/hpa-app -n userscale
+
+Rebuild time: 1-2 minutes (cached layers)
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+If pods show ImagePullBackOff:
+    eval $(minikube docker-env)
+    docker images | grep userscale-gpu
+    # If missing, rebuild
+
+If port forwarding stops:
+    pkill -f 'kubectl port-forward'
+    kubectl port-forward -n userscale svc/userscale-app 8001:8000 &
+    kubectl port-forward -n userscale svc/hpa-app 8002:8000 &
+
+If Minikube stops:
+    minikube start
+    # Image persists, just restart port forwarding
+
+================================================================================
