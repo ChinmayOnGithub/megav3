@@ -1,0 +1,31 @@
+// permission to k8s
+sudo chmod 644 /etc/rancher/k3s/k3s.yaml
+
+// setup the environment and pods
+python3 run_files/setup.py --cleanup
+python3 run_files/setup.py --skip-deps
+
+
+// kill existing port 
+1. kill $(lsof -ti:8001)
+2. kill $(lsof -ti:8002)
+
+// port forward
+1. kubectl port-forward -n userscale svc/hpa-app 8002:8000
+2. kubectl port-forward -n userscale svc/userscale-app 8001:8000
+
+// run project
+demo.py
+
+// monitor metrics, pods
+1. python3 watch_gpu_metrics.py
+2. python3 watch_pods.py
+3. kubectl get pods -A
+
+
+
+
+
+sudo ls -la /etc/rancher/k3s/k3s.yaml
+
+

@@ -1,0 +1,21 @@
+{
+  "userscale": {
+    "avg_replicas": 5.0,
+    "max_replicas": 5,
+    "min_replicas": 5,
+    "avg_gpu": 93.11999999999999,
+    "avg_latency": 32531.57366812229,
+    "requests": 16,
+    "failed": 104
+  },
+  "hpa": {
+    "avg_replicas": 4.057142857142857,
+    "max_replicas": 5,
+    "min_replicas": 1,
+    "avg_gpu": 87.48571428571428,
+    "avg_latency": 36918.605983257294,
+    "requests": 12,
+    "failed": 108
+  },
+  "timestamp": "2025-11-26T14:30:59.961088"
+}

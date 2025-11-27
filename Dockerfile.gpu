@@ -1,5 +1,6 @@
 # Multi-stage CUDA-enabled Dockerfile - All dependencies baked in at build time
-FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04 AS base
+# Using CUDA 12.2 runtime - most stable with driver 580.x
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04 AS base
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -67,7 +68,8 @@ COPY scaler /app/scaler
 # Expose port
 EXPOSE 8000
 
-ENV LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:/usr/local/cuda/compat:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/cuda/compat:/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:${LD_LIBRARY_PATH}" \
+    CUDA_COMPAT_PATH="/usr/local/cuda/compat"
 
 # Health check (non-GPU endpoint)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

@@ -33,17 +33,24 @@ spec:
         - name: PORT
           value: "8000"
         - name: WORKLOAD_TYPE
-          value: "matrix"
-        - name: CPU_THREADS
-          value: "4"
+          value: "sorting"
+        - name: LD_LIBRARY_PATH
+          value: "/opt/cuda/lib64:/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
         resources:
           requests:
-            memory: "256Mi"
-            cpu: "500m"
-          limits:
-            memory: "512Mi"
-            cpu: "1000m"
+            cpu: "400m"
+            memory: "200Mi"
             nvidia.com/gpu: "1"
+          limits:
+            cpu: "800m"
+            memory: "400Mi"
+            nvidia.com/gpu: "1"
+        
+        volumeMounts:
+        - name: cuda-libs
+          mountPath: /opt/cuda
+          readOnly: true
+
         livenessProbe:
           httpGet:
             path: /healthz
@@ -56,6 +63,12 @@ spec:
             port: 8000
           initialDelaySeconds: 5
           periodSeconds: 10
+      
+      volumes:
+      - name: cuda-libs
+        hostPath:
+          path: /opt/cuda
+          type: Directory
 ---
 apiVersion: v1
 kind: Service
@@ -86,28 +99,32 @@ spec:
     kind: Deployment
     name: hpa-app
   minReplicas: 1
-  maxReplicas: 20
+  maxReplicas: 6
   metrics:
   - type: Resource
     resource:
       name: cpu
       target:
         type: Utilization
-        averageUtilization: 50
+        averageUtilization: 40      # 40% CPU target
   behavior:
     scaleUp:
-      stabilizationWindowSeconds: 0
-      policies:
-      - type: Percent
-        value: 100
-        periodSeconds: 15
-      - type: Pods
-        value: 4
-        periodSeconds: 15
+      stabilizationWindowSeconds: 0   # No stabilization - scale immediately
       selectPolicy: Max
-    scaleDown:
-      stabilizationWindowSeconds: 60
       policies:
       - type: Percent
-        value: 50
-        periodSeconds: 15
+        value: 100                    # Double pods
+        periodSeconds: 10             # Every 10 seconds
+      - type: Pods
+        value: 5                      # Or add 5 pods
+        periodSeconds: 10
+    scaleDown:
+      stabilizationWindowSeconds: 30  # Wait 30s before scaling down
+      selectPolicy: Min
+      policies:
+      - type: Percent
+        value: 50                     # Remove 50% of pods
+        periodSeconds: 30
+      - type: Pods
+        value: 2                      # Or remove 2 pods
+        periodSeconds: 30

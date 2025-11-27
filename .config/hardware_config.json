@@ -1,0 +1,23 @@
+{
+  "max_pods": 6,
+  "max_vgpus": 6,
+  "memory_per_pod_mb": 256,
+  "cpu_per_pod_millicores": 500,
+  "gpu_info": {
+    "detected": true,
+    "name": "NVIDIA Corporation Device 10fa (rev a1)",
+    "driver_loaded": true,
+    "driver_version": "550.163.01",
+    "vram": "4096 MiB"
+  },
+  "cuda_info": {
+    "version": "12.0",
+    "installed": true,
+    "libs_found": true
+  },
+  "system_info": {
+    "cpu_cores": 12,
+    "ram_gb": 7,
+    "python_version": "3.12.3"
+  }
+}

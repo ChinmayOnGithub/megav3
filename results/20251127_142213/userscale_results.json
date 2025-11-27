@@ -1,0 +1,318 @@
+{
+  "experiment": "UserScale",
+  "duration_seconds": 90,
+  "workload_size": 800,
+  "min_pods": 1,
+  "max_pods": 4,
+  "avg_pods": 2.6551724137931036,
+  "gpu_utilization_avg": 70.37037037037037,
+  "gpu_utilization_max": 79.0,
+  "cpu_utilization_avg": 14.010919540229885,
+  "cpu_per_pod_avg": 6.996719348659004,
+  "latency_avg_ms": 3154.3564599135825,
+  "latency_min_ms": 2403.88560295105,
+  "latency_max_ms": 13106.239795684814,
+  "latency_p95_ms": 3235.926628112793,
+  "latency_p99_ms": 12519.524335861206,
+  "total_requests": 580,
+  "failed_requests": 0,
+  "success_rate": 100.0,
+  "throughput_rps": 6.444444444444445,
+  "requests_per_pod": 218.4415584415584,
+  "gpu_efficiency": 26.5031265031265,
+  "scaling_efficiency": 0.6637931034482759,
+  "concurrent_users_per_pod": 7.532467532467532,
+  "scaling_events": 2,
+  "timeline": [
+    {
+      "time": 1764233682.3933122,
+      "replicas": 1,
+      "gpu_avg": 0,
+      "gpu_max": 0,
+      "cpu_avg": 6.1,
+      "latency_avg": 0,
+      "latency_max": 0,
+      "total_requests": 20
+    },
+    {
+      "time": 1764233685.5934608,
+      "replicas": 1,
+      "gpu_avg": 1.0,
+      "gpu_max": 1.0,
+      "cpu_avg": 10.5,
+      "latency_avg": 0,
+      "latency_max": 0,
+      "total_requests": 20
+    },
+    {
+      "time": 1764233688.766944,
+      "replicas": 1,
+      "gpu_avg": 0,
+      "gpu_max": 0,
+      "cpu_avg": 14.4,
+      "latency_avg": 0,
+      "latency_max": 0,
+      "total_requests": 20
+    },
+    {
+      "time": 1764233691.9311218,
+      "replicas": 1,
+      "gpu_avg": 3.0,
+      "gpu_max": 3.0,
+      "cpu_avg": 9.6,
+      "latency_avg": 0,
+      "latency_max": 0,
+      "total_requests": 20
+    },
+    {
+      "time": 1764233695.133093,
+      "replicas": 1,
+      "gpu_avg": 76.0,
+      "gpu_max": 76.0,
+      "cpu_avg": 10.3,
+      "latency_avg": 11578.586704590742,
+      "latency_max": 11578.586704590742,
+      "total_requests": 37
+    },
+    {
+      "time": 1764233698.331221,
+      "replicas": 1,
+      "gpu_avg": 75.0,
+      "gpu_max": 75.0,
+      "cpu_avg": 19.1,
+      "latency_avg": 7442.519713670779,
+      "latency_max": 7442.519713670779,
+      "total_requests": 59
+    },
+    {
+      "time": 1764233701.5316496,
+      "replicas": 1,
+      "gpu_avg": 79.0,
+      "gpu_max": 79.0,
+      "cpu_avg": 18.8,
+      "latency_avg": 5691.637012693617,
+      "latency_max": 5691.637012693617,
+      "total_requests": 83
+    },
+    {
+      "time": 1764233704.7250743,
+      "replicas": 1,
+      "gpu_avg": 76.0,
+      "gpu_max": 76.0,
+      "cpu_avg": 9.1,
+      "latency_avg": 4947.975857117597,
+      "latency_max": 4947.975857117597,
+      "total_requests": 105
+    },
+    {
+      "time": 1764233707.891941,
+      "replicas": 1,
+      "gpu_avg": 78.0,
+      "gpu_max": 78.0,
+      "cpu_avg": 10.233333333333333,
+      "latency_avg": 4495.148570449264,
+      "latency_max": 4495.148570449264,
+      "total_requests": 128
+    },
+    {
+      "time": 1764233711.0626209,
+      "replicas": 1,
+      "gpu_avg": 77.0,
+      "gpu_max": 77.0,
+      "cpu_avg": 10.799999999999999,
+      "latency_avg": 4200.65880549773,
+      "latency_max": 4200.65880549773,
+      "total_requests": 151
+    },
+    {
+      "time": 1764233714.3014667,
+      "replicas": 3,
+      "gpu_avg": 75.0,
+      "gpu_max": 75.0,
+      "cpu_avg": 12.6,
+      "latency_avg": 4003.4244512420855,
+      "latency_max": 4003.4244512420855,
+      "total_requests": 173
+    },
+    {
+      "time": 1764233717.5030718,
+      "replicas": 3,
+      "gpu_avg": 77.0,
+      "gpu_max": 77.0,
+      "cpu_avg": 12.566666666666668,
+      "latency_avg": 3854.7060544150218,
+      "latency_max": 3854.7060544150218,
+      "total_requests": 195
+    },
+    {
+      "time": 1764233720.7112687,
+      "replicas": 3,
+      "gpu_avg": 76.0,
+      "gpu_max": 76.0,
+      "cpu_avg": 12.733333333333334,
+      "latency_avg": 3735.761991654984,
+      "latency_max": 3735.761991654984,
+      "total_requests": 218
+    },
+    {
+      "time": 1764233723.8979075,
+      "replicas": 3,
+      "gpu_avg": 74.0,
+      "gpu_max": 74.0,
+      "cpu_avg": 12.233333333333334,
+      "latency_avg": 2831.3346683979034,
+      "latency_max": 2831.3346683979034,
+      "total_requests": 240
+    },
+    {
+      "time": 1764233727.1125135,
+      "replicas": 3,
+      "gpu_avg": 74.0,
+      "gpu_max": 74.0,
+      "cpu_avg": 14.9,
+      "latency_avg": 2834.70890045166,
+      "latency_max": 2834.70890045166,
+      "total_requests": 263
+    },
+    {
+      "time": 1764233730.3012197,
+      "replicas": 3,
+      "gpu_avg": 75.0,
+      "gpu_max": 75.0,
+      "cpu_avg": 6.066666666666666,
+      "latency_avg": 2832.5900042057037,
+      "latency_max": 2832.5900042057037,
+      "total_requests": 284
+    },
+    {
+      "time": 1764233733.4901237,
+      "replicas": 3,
+      "gpu_avg": 74.0,
+      "gpu_max": 74.0,
+      "cpu_avg": 28.933333333333334,
+      "latency_avg": 2833.6525464057922,
+      "latency_max": 2833.6525464057922,
+      "total_requests": 306
+    },
+    {
+      "time": 1764233736.7057836,
+      "replicas": 3,
+      "gpu_avg": 77.0,
+      "gpu_max": 77.0,
+      "cpu_avg": 23.85,
+      "latency_avg": 2836.821309328079,
+      "latency_max": 2836.821309328079,
+      "total_requests": 330
+    },
+    {
+      "time": 1764233739.910265,
+      "replicas": 3,
+      "gpu_avg": 78.0,
+      "gpu_max": 78.0,
+      "cpu_avg": 21.625,
+      "latency_avg": 2836.896288394928,
+      "latency_max": 2836.896288394928,
+      "total_requests": 353
+    },
+    {
+      "time": 1764233743.1327965,
+      "replicas": 4,
+      "gpu_avg": 74.0,
+      "gpu_max": 74.0,
+      "cpu_avg": 17.225,
+      "latency_avg": 2834.3857049942017,
+      "latency_max": 2834.3857049942017,
+      "total_requests": 374
+    },
+    {
+      "time": 1764233746.3322983,
+      "replicas": 4,
+      "gpu_avg": 74.0,
+      "gpu_max": 74.0,
+      "cpu_avg": 16.475,
+      "latency_avg": 2834.9196803569794,
+      "latency_max": 2834.9196803569794,
+      "total_requests": 398
+    },
+    {
+      "time": 1764233749.5528972,
+      "replicas": 4,
+      "gpu_avg": 74.0,
+      "gpu_max": 74.0,
+      "cpu_avg": 15.75,
+      "latency_avg": 2836.51433467865,
+      "latency_max": 2836.51433467865,
+      "total_requests": 421
+    },
+    {
+      "time": 1764233752.7344685,
+      "replicas": 4,
+      "gpu_avg": 75.0,
+      "gpu_max": 75.0,
+      "cpu_avg": 15.375,
+      "latency_avg": 2836.5187573432922,
+      "latency_max": 2836.5187573432922,
+      "total_requests": 442
+    },
+    {
+      "time": 1764233755.9265707,
+      "replicas": 4,
+      "gpu_avg": 75.0,
+      "gpu_max": 75.0,
+      "cpu_avg": 12.475,
+      "latency_avg": 2833.2173371315002,
+      "latency_max": 2833.2173371315002,
+      "total_requests": 465
+    },
+    {
+      "time": 1764233759.1011055,
+      "replicas": 4,
+      "gpu_avg": 76.0,
+      "gpu_max": 76.0,
+      "cpu_avg": 20.5,
+      "latency_avg": 2830.9740042686462,
+      "latency_max": 2830.9740042686462,
+      "total_requests": 488
+    },
+    {
+      "time": 1764233762.2734308,
+      "replicas": 4,
+      "gpu_avg": 77.0,
+      "gpu_max": 77.0,
+      "cpu_avg": 10.425,
+      "latency_avg": 2830.8379924297333,
+      "latency_max": 2830.8379924297333,
+      "total_requests": 509
+    },
+    {
+      "time": 1764233765.4492002,
+      "replicas": 4,
+      "gpu_avg": 77.0,
+      "gpu_max": 77.0,
+      "cpu_avg": 11.350000000000001,
+      "latency_avg": 2830.1058399677277,
+      "latency_max": 2830.1058399677277,
+      "total_requests": 532
+    },
+    {
+      "time": 1764233768.6328783,
+      "replicas": 4,
+      "gpu_avg": 77.0,
+      "gpu_max": 77.0,
+      "cpu_avg": 11.850000000000001,
+      "latency_avg": 2826.2447345256805,
+      "latency_max": 2826.2447345256805,
+      "total_requests": 554
+    },
+    {
+      "time": 1764233771.8156292,
+      "replicas": 4,
+      "gpu_avg": 76.0,
+      "gpu_max": 76.0,
+      "cpu_avg": 10.45,
+      "latency_avg": 2831.893607378006,
+      "latency_max": 2831.893607378006,
+      "total_requests": 576
+    }
+  ]
+}

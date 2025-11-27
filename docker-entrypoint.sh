@@ -1,5 +1,5 @@
 #!/bin/bash
-# Docker entrypoint script - verifies dependencies at runtime
+# Safe entrypoint — GPU optional, no hard failures
 
 set -e
 
@@ -8,46 +8,53 @@ echo "  UserScale Container Startup"
 echo "=========================================="
 echo ""
 
-# Verify Python dependencies (non-GPU)
-echo "✓ Checking Python dependencies..."
-python3 -c "import fastapi, uvicorn, numpy, requests, psutil, pydantic, kubernetes, httpx, tenacity" 2>/dev/null
-if [ $? -eq 0 ]; then
-    echo "  ✅ Core dependencies OK"
-else
-    echo "  ❌ Core dependencies missing"
-    exit 1
-fi
+echo "✓ Checking core Python dependencies..."
+python3 - << 'EOF'
+import fastapi, uvicorn, numpy, requests, psutil, pydantic, kubernetes, httpx, tenacity
+EOF
 
-# Verify pynvml (can check without GPU)
-python3 -c "import pynvml" 2>/dev/null
-if [ $? -eq 0 ]; then
-    echo "  ✅ pynvml installed"
-else
-    echo "  ❌ pynvml missing"
-    exit 1
-fi
+echo "  [OK] Core dependencies OK"
 
-# Verify CuPy is installed (don't import, just check module exists)
-python3 -c "import importlib.util; assert importlib.util.find_spec('cupy') is not None" 2>/dev/null
-if [ $? -eq 0 ]; then
-    echo "  ✅ CuPy installed"
-else
-    echo "  ❌ CuPy missing"
-    exit 1
-fi
-
-# Try to detect GPU (optional, won't fail if not present)
 echo ""
-echo "✓ Checking GPU availability..."
-if command -v nvidia-smi &> /dev/null; then
-    if nvidia-smi &> /dev/null; then
-        echo "  ✅ GPU detected via nvidia-smi"
-        nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>/dev/null | head -1 | sed 's/^/     /'
+echo "✓ Checking pynvml..."
+python3 - << 'EOF'
+import pynvml
+try:
+    pynvml.nvmlInit()
+    print("  [OK] pynvml initialized")
+    h = pynvml.nvmlDeviceGetHandleByIndex(0)
+    name = pynvml.nvmlDeviceGetName(h).decode()
+    print(f"     GPU: {name}")
+except Exception as e:
+    print(f"  [WARNING] pynvml present but GPU not accessible: {e}")
+EOF
+
+echo ""
+echo "✓ Checking CuPy..."
+python3 - << 'EOF'
+try:
+    import cupy as cp
+    a = cp.zeros((1,))
+    cp.cuda.Stream.null.synchronize()
+    print("  [OK] CuPy loaded and CUDA context OK")
+except ImportError:
+    print("  [ERROR] CuPy not installed (should not happen)")
+    exit(1)
+except Exception as e:
+    print(f"  [WARNING] CuPy installed but GPU not usable: {e}")
+EOF
+
+echo ""
+echo "✓ Checking nvidia-smi..."
+if command -v nvidia-smi &>/dev/null; then
+    if nvidia-smi &>/dev/null; then
+        echo "  [OK] GPU detected via nvidia-smi"
+        nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader | sed 's/^/     /'
     else
-        echo "  ⚠️  nvidia-smi present but no GPU detected"
+        echo "  [WARNING] nvidia-smi found but no GPU visible"
     fi
 else
-    echo "  ⚠️  nvidia-smi not available (CPU fallback mode)"
+    echo "  [WARNING] nvidia-smi not available (Docker time-slicing mode)"
 fi
 
 echo ""
@@ -55,5 +62,4 @@ echo "✓ Starting application..."
 echo "=========================================="
 echo ""
 
-# Execute the main command (passed as arguments to this script)
 exec "$@"

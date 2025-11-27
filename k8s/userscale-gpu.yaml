@@ -29,33 +29,51 @@ spec:
         ports:
         - containerPort: 8000
           name: http
+
         env:
         - name: PORT
           value: "8000"
         - name: WORKLOAD_TYPE
-          value: "matrix"
+          value: "sorting"        # sorting or convolution
         - name: CPU_THREADS
-          value: "4"
+          value: "4"             
+        - name: LD_LIBRARY_PATH
+          value: "/opt/cuda/lib64:/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
+
         resources:
           requests:
-            memory: "256Mi"
-            cpu: "500m"
+            cpu: "400m"
+            memory: "200Mi"
           limits:
-            memory: "512Mi"
-            cpu: "1000m"
-            nvidia.com/gpu: "1"
+            cpu: "800m"
+            memory: "400Mi"
+            nvidia.com/gpu: "1" 
+        
+        volumeMounts:
+        - name: cuda-libs
+          mountPath: /opt/cuda
+          readOnly: true
+
         livenessProbe:
           httpGet:
             path: /healthz
             port: 8000
           initialDelaySeconds: 10
           periodSeconds: 30
+
         readinessProbe:
           httpGet:
             path: /healthz
             port: 8000
           initialDelaySeconds: 5
           periodSeconds: 10
+      
+      volumes:
+      - name: cuda-libs
+        hostPath:
+          path: /opt/cuda
+          type: Directory
+
 ---
 apiVersion: v1
 kind: Service
@@ -70,10 +88,11 @@ spec:
     app: userscale-app
     scaler: userscale
   ports:
-  - port: 8000
+  - name: http
+    port: 8000
     targetPort: 8000
-    name: http
   type: ClusterIP
+
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -82,22 +101,26 @@ metadata:
   namespace: userscale
   labels:
     app: userscale-scaler
+    scaler: userscale
 spec:
   replicas: 1
   selector:
     matchLabels:
       app: userscale-scaler
+      scaler: userscale
   template:
     metadata:
       labels:
         app: userscale-scaler
+        scaler: userscale
     spec:
       serviceAccountName: userscale-scaler
       containers:
       - name: scaler
-        image: userscale-gpu:latest
+        image: userscale-gpu:latest        # Runs scaler.main inside same image
         imagePullPolicy: Never
         command: ["python3", "-m", "scaler.main"]
+
         env:
         - name: NAMESPACE
           value: "userscale"
@@ -108,32 +131,33 @@ spec:
         - name: APP_PORT
           value: "8000"
         - name: SYNC_PERIOD
-          value: "5"
+          value: "5"              # Optimal: 3x faster than HPA, stable
         - name: MIN_REPLICAS
           value: "1"
         - name: MAX_REPLICAS
-          value: "20"
+          value: "4"              # Less than HPA's 5 for efficiency
         - name: GPU_TARGET
-          value: "30"
+          value: "75"             # Conservative threshold
         - name: LATENCY_TARGET_MS
-          value: "500"
+          value: "500"            # 500ms latency target
         - name: USERS_TARGET_PER_POD
-          value: "20"
-        - name: SCALE_UP_STEP
-          value: "2"
+          value: "8"              # Match HPA's capacity
+
         resources:
           requests:
-            memory: "128Mi"
             cpu: "100m"
+            memory: "128Mi"
           limits:
-            memory: "256Mi"
-            cpu: "500m"
+            cpu: "250m"
+            memory: "256Mi"     # NO GPU here
+
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: userscale-scaler
   namespace: userscale
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -143,13 +167,11 @@ metadata:
 rules:
 - apiGroups: ["apps"]
   resources: ["deployments", "deployments/scale", "deployments/status"]
-  verbs: ["get", "list", "watch", "update", "patch"]
+  verbs: ["get", "list", "watch", "patch", "update"]
 - apiGroups: [""]
-  resources: ["pods", "pods/status"]
+  resources: ["pods"]
   verbs: ["get", "list", "watch"]
-- apiGroups: [""]
-  resources: ["services", "endpoints"]
-  verbs: ["get", "list", "watch"]
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

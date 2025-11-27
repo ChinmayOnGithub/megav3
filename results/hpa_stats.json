@@ -1,0 +1,9 @@
+{
+  "avg_replicas": 4.057142857142857,
+  "max_replicas": 5,
+  "min_replicas": 1,
+  "avg_gpu": 87.48571428571428,
+  "avg_latency": 36918.605983257294,
+  "requests": 12,
+  "failed": 108
+}

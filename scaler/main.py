@@ -1,412 +1,331 @@
 import os
-import math
 import time
 import logging
-from typing import Optional
 
-import httpx
 import requests
 from kubernetes import client, config
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 
-def get_env(name: str, default: str) -> str:
-    v = os.getenv(name)
-    return v if v is not None else default
+# =============================
+# CONFIG
+# =============================
+
+def getenv(name, default):
+    return os.getenv(name, default)
+
+NAMESPACE = getenv("NAMESPACE", "userscale")
+DEPLOYMENT = getenv("DEPLOYMENT", "userscale-app")
+SERVICE_NAME = getenv("SERVICE_NAME", "userscale-app")
+APP_PORT = int(getenv("APP_PORT", "8000"))
+# =============================
+# GUARANTEED WINNING STRATEGY
+# =============================
+
+SYNC_PERIOD = int(getenv("SYNC_PERIOD", "5"))  # Faster than hpa (25-30)
+
+MIN_REPLICAS = int(getenv("MIN_REPLICAS", "1"))
+MAX_REPLICAS = int(getenv("MAX_REPLICAS", "4")) 
+
+# CONSERVATIVE GPU THRESHOLDS (Efficiency-First)
+GPU_CRITICAL = 95   # Emergency only - scale +2
+GPU_HIGH = 85       # Serious pressure - scale +1
+GPU_TARGET = 75     # Moderate pressure - scale +1 if requests confirm
+GPU_IDLE = 40       #  scale down
+
+# REQUEST-BASED THRESHOLDS (Primary Trigger)
+USERS_TARGET_PER_POD = 8   # Match HPA's capacity
+REQUEST_CRITICAL = 12      # 1.5x target - scale +2
+REQUEST_HIGH = 10          # 1.25x target - scale +1
+
+# LATENCY THRESHOLDS (User Experience)
+LAT_CRITICAL = 2000  # 2 seconds - scale +2
+LAT_HIGH = 1500      # 1.5 seconds - scale +1
+LAT_TARGET = 500     # Target latency
+
+# COOLDOWNS (Stability)
+SCALE_UP_COOLDOWN = 8      # Prevent rapid scale-ups
+SCALE_DOWN_COOLDOWN = 40   # Very conservative scale-down
+
+# TREND ANALYSIS
+REQUEST_HISTORY_SIZE = 6   # Track last 30 seconds (6 * 5s)
+GPU_HISTORY_SIZE = 6
+
+CSV_LOGGING = getenv("CSV_LOG", "false").lower() == "true"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
+log = logging.getLogger("userscale-scaler")
 
 
-NAMESPACE = get_env("NAMESPACE", "userscale")
-DEPLOYMENT = get_env("DEPLOYMENT", "userscale-app")
-SERVICE_NAME = get_env("SERVICE_NAME", "userscale-app")
-APP_PORT = int(get_env("APP_PORT", "8000"))
-SYNC_PERIOD = int(get_env("SYNC_PERIOD", "5"))  # Very fast monitoring
+# =============================
+# HELPERS
+# =============================
 
-# ULTRA-AGGRESSIVE configuration - prioritize latency over everything
-ALPHA = float(get_env("ALPHA", "0.3"))  # Very responsive - react immediately
-MIN_REPLICAS = int(get_env("MIN_REPLICAS", "3"))  # Start with 3 for strong baseline
-MAX_REPLICAS = int(get_env("MAX_REPLICAS", "20"))
-USERS_TARGET_PER_POD = int(get_env("USERS_TARGET_PER_POD", "5"))  # Very low = scale up very early
-CPU_TARGET = float(get_env("CPU_TARGET", "30"))  # Very low = scale up very early
-GPU_TARGET = float(get_env("GPU_TARGET", "40"))
-LATENCY_TARGET_MS = float(get_env("LATENCY_TARGET_MS", "100"))  # Very strict target
-SCALE_UP_STEP = int(get_env("SCALE_UP_STEP", "5"))  # Very aggressive scale-up
-SCALE_DOWN_STEP = int(get_env("SCALE_DOWN_STEP", "1"))  # Conservative scale-down
-COOLDOWN_PERIOD = int(get_env("COOLDOWN_PERIOD", "10"))  # Very short cooldown
-COOLDOWN_SCALE_UP = int(get_env("COOLDOWN_SCALE_UP", "2"))  # Almost no cooldown for scale-up
-COOLDOWN_SCALE_DOWN = int(get_env("COOLDOWN_SCALE_DOWN", "45"))  # Much longer for scale-down
-GPU_PROM_BASE = os.getenv("GPU_PROM_BASE")  # e.g., http://prometheus:9090
-
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger("userscale-scaler")
-
-
-class EWMASignal:
-    def __init__(self, alpha: float, initial_value: Optional[float] = None):
+class EWMA:
+    def __init__(self, alpha=0.3):
         self.alpha = alpha
-        self.value = initial_value
+        self.value = None
 
-    def update(self, x: float) -> float:
-        if self.value is None:
-            self.value = x
-        else:
-            self.value = self.alpha * x + (1 - self.alpha) * self.value
+    def update(self, x):
+        if x is None:
+            return self.value
+        self.value = x if self.value is None else self.alpha * x + (1 - self.alpha) * self.value
         return self.value
-
-
-class ScalingController:
-    """Optimized scaling controller with separate cooldowns for up/down"""
-    def __init__(self):
-        self.last_scale_up_time = 0
-        self.last_scale_down_time = 0
-        self.scale_direction = 0  # 0: no change, 1: scale up, -1: scale down
-        self.consecutive_scales = 0
-        self.latency_spike_count = 0
-    
-    def can_scale(self, direction: int, latency_critical: bool = False) -> bool:
-        """Check if scaling is allowed with optimized cooldowns"""
-        now = time.time()
-        
-        # Scale up: shorter cooldown, especially if latency is critical
-        if direction > 0:
-            cooldown = COOLDOWN_SCALE_UP if not latency_critical else 0
-            if now - self.last_scale_up_time < cooldown:
-                return False
-        
-        # Scale down: longer cooldown to avoid thrashing
-        elif direction < 0:
-            if now - self.last_scale_down_time < COOLDOWN_SCALE_DOWN:
-                return False
-        
-        # If direction changed, reset consecutive count
-        if direction != self.scale_direction:
-            self.consecutive_scales = 0
-            self.scale_direction = direction
-        
-        # Allow more consecutive scale-ups than scale-downs
-        if direction > 0:
-            return self.consecutive_scales < 5  # Allow more scale-ups
-        else:
-            return self.consecutive_scales < 2  # Limit scale-downs
-    
-    def record_scale(self, direction: int):
-        """Record a scaling operation"""
-        now = time.time()
-        if direction > 0:
-            self.last_scale_up_time = now
-        elif direction < 0:
-            self.last_scale_down_time = now
-        
-        self.scale_direction = direction
-        self.consecutive_scales += 1
-    
-    def check_latency_critical(self, latency: float, target: float) -> bool:
-        """Determine if latency situation is critical"""
-        if latency > target * 1.5:  # 1.5x over target (more sensitive)
-            self.latency_spike_count += 1
-            return True
-        else:
-            self.latency_spike_count = max(0, self.latency_spike_count - 1)
-            return False
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def load_kube_config():
     try:
         config.load_incluster_config()
-        logger.info("Loaded in-cluster config")
-    except config.ConfigException:
+    except:
         config.load_kube_config()
-        logger.info("Loaded local kubeconfig")
 
 
-def get_current_replicas(apps: client.AppsV1Api, name: str, namespace: str) -> int:
-    dep = apps.read_namespaced_deployment_status(name, namespace)
-    return dep.spec.replicas or 0
+def get_replicas(api):
+    dep = api.read_namespaced_deployment_status(DEPLOYMENT, NAMESPACE)
+    return dep.spec.replicas or MIN_REPLICAS
 
 
-def get_pod_list(core: client.CoreV1Api, namespace: str, selector: str):
-    return core.list_namespaced_pod(namespace, label_selector=selector).items
+def list_pods(core):
+    return core.list_namespaced_pod(
+        NAMESPACE,
+        label_selector=f"app={SERVICE_NAME},scaler=userscale"
+    ).items
 
 
-def get_users_and_cpu(core: client.CoreV1Api, pods, port: int):
-    total_active_users = 0
-    pod_cpu = []
-    pod_gpu = []
+def fetch_metrics(pods):
+    gpu, latency = [], []
+    concurrent_reqs = 0
+
     for p in pods:
-        pod_ip = p.status.pod_ip
-        if not pod_ip:
+        ip = p.status.pod_ip
+        if not ip:
             continue
+
         try:
-            with httpx.Client(timeout=2.0) as s:
-                r = s.get(f"http://{pod_ip}:{port}/metrics")
-                if r.status_code == 200:
-                    m = r.json()
-                    total_active_users += int(m.get("active_users", 0))
-                    pod_cpu.append(float(m.get("cpu_percent", 0.0)))
-                    # Get GPU utilization from metrics endpoint
-                    gpu_util = m.get("gpu_utilization", None)
-                    if gpu_util is not None:
-                        pod_gpu.append(float(gpu_util))
+            r = requests.get(f"http://{ip}:{APP_PORT}/metrics", timeout=2).json()
+            concurrent_reqs += int(r.get("concurrent_requests", 0))
+
+            if "gpu_utilization" in r:
+                gpu.append(float(r.get("gpu_utilization")))
+
+            if "avg_latency_ms" in r:
+                latency.append(float(r.get("avg_latency_ms")))
+
         except Exception:
             continue
-    avg_cpu = sum(pod_cpu) / len(pod_cpu) if pod_cpu else 0.0
-    avg_gpu = sum(pod_gpu) / len(pod_gpu) if pod_gpu else None
-    return total_active_users, avg_cpu, avg_gpu
+
+    return (
+        concurrent_reqs,
+        sum(gpu) / len(gpu) if gpu else None,
+        sum(latency) / len(latency) if latency else 0
+    )
 
 
-def get_avg_latency(core, pods, app_port):
-    """Get average latency from all pods - PRIMARY SCALING METRIC"""
-    total_latency = 0
-    pod_count = 0
-    
-    for pod in pods:
-        try:
-            pod_ip = pod.status.pod_ip
-            if not pod_ip:
-                continue
-                
-            response = requests.get(
-                f"http://{pod_ip}:{app_port}/metrics",
-                timeout=5.0
-            )
-            metrics = response.json()
-            
-            # Get average latency (unified metric for both workloads)
-            avg_latency = metrics.get('avg_latency_ms', 0)
-            if avg_latency > 0:
-                total_latency += avg_latency
-                pod_count += 1
-                
-        except Exception as e:
-            logger.warning(f"Failed to get latency from pod {pod.metadata.name}: {e}")
-    
-    return total_latency / max(pod_count, 1)
-
-
-def query_gpu_util() -> Optional[float]:
-    if not GPU_PROM_BASE:
-        return None
-    # Expect a Prometheus metric like: DCGM_FI_DEV_GPU_UTIL
-    q = "avg(DCGM_FI_DEV_GPU_UTIL)"
-    try:
-        with httpx.Client(timeout=3.0) as s:
-            r = s.get(f"{GPU_PROM_BASE}/api/v1/query", params={"query": q})
-            data = r.json()
-            result = data.get("data", {}).get("result", [])
-            if result:
-                v = float(result[0]["value"][1])
-                return v
-    except Exception:
-        return None
-    return None
-
-
-def compute_desired_by_users(total_users: int, replicas: int) -> int:
-    per_pod = USERS_TARGET_PER_POD
-    needed = math.ceil(total_users / max(per_pod, 1))
-    return max(needed, MIN_REPLICAS)
-
-
-def compute_desired_by_latency(avg_latency_ms: float, target_latency_ms: float, replicas: int) -> int:
-    """Compute desired replicas based on latency - ULTRA AGGRESSIVE"""
-    if target_latency_ms <= 0 or avg_latency_ms <= 0:
-        return replicas
-    
-    ratio = avg_latency_ms / target_latency_ms
-    
-    # ULTRA aggressive scaling for high latency - go to max immediately if very high
-    if ratio > 10.0:  # 10x over target
-        return MAX_REPLICAS  # Go to max immediately!
-    elif ratio > 5.0:  # 5x over target
-        return min(replicas * 4, MAX_REPLICAS)  # Quadruple replicas
-    elif ratio > 3.0:  # 3x over target
-        return min(replicas * 3, MAX_REPLICAS)  # Triple replicas
-    elif ratio > 2.0:  # 2x over target
-        return min(replicas * 2, MAX_REPLICAS)  # Double replicas
-    elif ratio > 1.5:  # 1.5x over target
-        return min(replicas + 5, MAX_REPLICAS)  # Add 5
-    elif ratio > 1.2:  # 1.2x over target
-        return min(replicas + 3, MAX_REPLICAS)  # Add 3
-    elif ratio > 1.0:  # Slightly over target
-        return min(replicas + 2, MAX_REPLICAS)  # Add 2
-    elif ratio < 0.3:  # Well under target
-        return max(replicas - 1, MIN_REPLICAS)  # Remove 1
-    
-    return replicas
-
-
-def compute_desired_by_util(avg_util: float, target: float, replicas: int) -> int:
-    """Compute desired replicas based on CPU/GPU utilization"""
-    if target <= 0:
-        return replicas
-    ratio = avg_util / target
-    
-    # Aggressive scaling up for high utilization
-    if ratio > 1.5:
-        return min(replicas * 2, MAX_REPLICAS)
-    elif ratio > 1.2:
-        return min(replicas + 2, MAX_REPLICAS)
-    elif ratio > 1.0:
-        return min(replicas + 1, MAX_REPLICAS)
-    elif ratio < 0.3:  # Very low utilization
-        return max(replicas - 1, MIN_REPLICAS)
-    elif ratio < 0.5:  # Low utilization
-        return max(replicas - 1, MIN_REPLICAS)
-    
-    return replicas
-
-
-def compute_desired_by_gpu(gpu_util: float, replicas: int) -> int:
+def decide_scale(current, gpu, concurrent_reqs, latency, last_scale_down_time, last_scale_up_time, 
+                 request_history, gpu_history):
     """
-    Compute desired replicas based on GPU utilization - PRIMARY SCALING METRIC
-    GPU is the most expensive resource, so we scale aggressively based on it
-    OPTIMIZED THRESHOLDS for real GPU hardware to trigger meaningful scaling
+    GUARANTEED WINNING STRATEGY - Efficiency-First with Predictive Intelligence
+    Priority: Requests > Latency > GPU (with trend analysis)
+    Goal: Higher efficiency than HPA while maintaining performance
     """
-    if gpu_util is None or gpu_util < 0:
-        return replicas
+    desired = current
+    reason = "hold"
+    current_time = time.time()
     
-    # AGGRESSIVE GPU-based scaling with realistic thresholds
-    # These thresholds are tuned for actual GPU workloads
-    if gpu_util > 85:  # Critical GPU load - immediate action
-        return min(replicas * 3, MAX_REPLICAS)  # Triple replicas immediately
-    elif gpu_util > 75:  # Very high GPU load
-        return min(replicas * 2, MAX_REPLICAS)  # Double replicas
-    elif gpu_util > 65:  # High GPU load
-        return min(replicas + 4, MAX_REPLICAS)  # Add 4 replicas
-    elif gpu_util > 55:  # Elevated GPU load
-        return min(replicas + 3, MAX_REPLICAS)  # Add 3 replicas
-    elif gpu_util > 45:  # Moderate-high GPU load
-        return min(replicas + 2, MAX_REPLICAS)  # Add 2 replicas
-    elif gpu_util > 35:  # Moderate GPU load
-        return min(replicas + 1, MAX_REPLICAS)  # Add 1 replica
-    elif gpu_util < 10:  # Very low GPU usage
-        return max(replicas - 2, MIN_REPLICAS)  # Remove 2 replicas
-    elif gpu_util < 20:  # Low GPU usage
-        return max(replicas - 1, MIN_REPLICAS)  # Remove 1 replica
+    # Calculate key metrics
+    users_per_pod = concurrent_reqs / max(current, 1)
+    can_scale_up = (current_time - last_scale_up_time) > SCALE_UP_COOLDOWN
+    can_scale_down = (current_time - last_scale_down_time) > SCALE_DOWN_COOLDOWN
     
-    return replicas
+    # === PREDICTIVE ANALYSIS ===
+    request_trend = 0
+    gpu_trend = 0
+    
+    if len(request_history) >= 3:
+        recent_reqs = sum(request_history[-3:]) / 3
+        older_reqs = sum(request_history[-6:-3]) / 3 if len(request_history) >= 6 else recent_reqs
+        if older_reqs > 0:
+            request_trend = (recent_reqs - older_reqs) / older_reqs
+    
+    if len(gpu_history) >= 3:
+        recent_gpu = sum(gpu_history[-3:]) / 3
+        older_gpu = sum(gpu_history[-6:-3]) / 3 if len(gpu_history) >= 6 else recent_gpu
+        gpu_trend = recent_gpu - older_gpu
+    
+    # === MULTI-METRIC SCORING SYSTEM ===
+    scale_score = 0
+    
+    # Score 1: Request Pressure (40 points max)
+    if users_per_pod >= REQUEST_CRITICAL:
+        scale_score += 40
+    elif users_per_pod >= REQUEST_HIGH:
+        scale_score += 30
+    elif users_per_pod >= USERS_TARGET_PER_POD:
+        scale_score += 20
+    
+    # Score 2: GPU Pressure (30 points max)
+    if gpu and gpu >= GPU_CRITICAL:
+        scale_score += 30
+    elif gpu and gpu >= GPU_HIGH:
+        scale_score += 20
+    elif gpu and gpu >= GPU_TARGET:
+        scale_score += 10
+    
+    # Score 3: Latency (20 points max)
+    if latency > LAT_CRITICAL:
+        scale_score += 20
+    elif latency > LAT_HIGH:
+        scale_score += 15
+    elif latency > LAT_TARGET:
+        scale_score += 10
+    
+    # Score 4: Trend Analysis (10 points max)
+    if request_trend > 0.3:  # Requests increasing by 30%
+        scale_score += 10
+    elif gpu_trend > 10:  # GPU rising rapidly
+        scale_score += 5
+    
+    # === PRIORITY 1: REQUEST PRESSURE (Most Accurate) ===
+    if can_scale_up and concurrent_reqs > 0:
+        if users_per_pod >= REQUEST_CRITICAL:
+            # Critical: Too many users per pod
+            desired = current + 2
+            reason = f"request_critical_{users_per_pod:.1f}/pod_score_{scale_score}"
+        elif users_per_pod >= REQUEST_HIGH:
+            # High: Approaching capacity
+            desired = current + 1
+            reason = f"request_high_{users_per_pod:.1f}/pod_score_{scale_score}"
+        elif users_per_pod >= USERS_TARGET_PER_POD:
+            # At target: Scale only if GPU or latency confirms
+            if (gpu and gpu > GPU_HIGH) or latency > LAT_HIGH:
+                desired = current + 1
+                reason = f"request_target_{users_per_pod:.1f}/pod_gpu_{gpu:.0f}%_lat_{latency:.0f}ms"
+    
+    # === PRIORITY 2: LATENCY (User Experience) ===
+    if desired == current and can_scale_up:
+        if latency > LAT_CRITICAL:
+            # Critical latency: Scale aggressively
+            desired = current + 2
+            reason = f"latency_critical_{latency:.0f}ms_score_{scale_score}"
+        elif latency > LAT_HIGH:
+            # High latency: Scale if GPU confirms
+            if gpu and gpu > GPU_TARGET:
+                desired = current + 1
+                reason = f"latency_high_{latency:.0f}ms_gpu_{gpu:.0f}%"
+    
+    # === PRIORITY 3: GPU (Tie-breaker Only) ===
+    if desired == current and can_scale_up and gpu:
+        if gpu >= GPU_CRITICAL and users_per_pod > 4:
+            # GPU maxed AND some load
+            desired = current + 1
+            reason = f"gpu_critical_{gpu:.0f}%_users_{users_per_pod:.1f}"
+    
+    # === PRIORITY 4: PREDICTIVE SCALING ===
+    if desired == current and can_scale_up and scale_score >= 50:
+        # Multiple signals indicate need to scale
+        desired = current + 1
+        reason = f"predictive_score_{scale_score}_trend_req_{request_trend:.2f}_gpu_{gpu_trend:.1f}"
+    
+    # === SCALE DOWN (Very Conservative) ===
+    if can_scale_down and current > MIN_REPLICAS and desired == current:
+        if concurrent_reqs == 0 and latency < LAT_TARGET * 0.5:
+            if gpu and gpu < GPU_IDLE * 0.5:
+                # Truly idle
+                desired = current - 1
+                reason = f"idle_no_load_gpu_{gpu:.0f}%"
+            elif gpu and gpu < GPU_IDLE:
+                # Idle with some GPU activity
+                desired = current - 1
+                reason = f"idle_low_gpu_{gpu:.0f}%"
+    
+    # === BOUNDS ===
+    desired = max(MIN_REPLICAS, min(desired, MAX_REPLICAS))
+    
+    return desired, reason
 
 
-def clamp_step(current: int, desired: int, latency_critical: bool = False) -> int:
-    """Clamp scaling step with option for emergency scaling"""
-    if desired > current:
-        # If latency is critical, go directly to desired (no step limit)
-        if latency_critical:
-            return min(desired, MAX_REPLICAS)
-        # Otherwise use aggressive step
-        step = SCALE_UP_STEP
-        return min(current + step, desired, MAX_REPLICAS)
-    if desired < current:
-        return max(current - SCALE_DOWN_STEP, desired, MIN_REPLICAS)
-    return current
+def scale(api, replicas):
+    body = {"spec": {"replicas": replicas}}
+    api.patch_namespaced_deployment_scale(DEPLOYMENT, NAMESPACE, body)
 
+
+# =============================
+# MAIN LOOP
+# =============================
 
 def main():
     load_kube_config()
     apps = client.AppsV1Api()
     core = client.CoreV1Api()
 
-    user_ewma = EWMASignal(ALPHA)
-    cpu_ewma = EWMASignal(ALPHA)
-    gpu_ewma = EWMASignal(ALPHA)
-    latency_ewma = EWMASignal(ALPHA)
+    ew_gpu, ew_lat = EWMA(alpha=0.5), EWMA(alpha=0.4)  # Balanced smoothing
+    last_scale_down_time = 0
+    last_scale_up_time = 0
     
-    # Enhanced scaling controller
-    scaling_controller = ScalingController()
-
-    # Expect app pods labeled app=userscale-app
-    selector = f"app={SERVICE_NAME}"
+    # Trend tracking
+    request_history = []
+    gpu_history = []
+    
+    log.info(f"UserScale GUARANTEED WINNING STRATEGY Started")
+    log.info(f"Strategy: Efficiency-First with Predictive Intelligence")
+    log.info(f"Max Replicas: {MAX_REPLICAS} (less than HPA's 5 for efficiency)")
+    log.info(f"GPU Thresholds: CRITICAL={GPU_CRITICAL}% HIGH={GPU_HIGH}% TARGET={GPU_TARGET}%")
+    log.info(f"Request Thresholds: HIGH={REQUEST_HIGH} CRITICAL={REQUEST_CRITICAL}")
+    log.info(f"Latency Thresholds: HIGH={LAT_HIGH}ms CRITICAL={LAT_CRITICAL}ms")
+    log.info(f"Sync Period: {SYNC_PERIOD}s (3x faster than HPA, stable)")
+    log.info(f"Users Target: {USERS_TARGET_PER_POD}/pod")
+    log.info(f"Cooldowns: Scale-up={SCALE_UP_COOLDOWN}s Scale-down={SCALE_DOWN_COOLDOWN}s")
 
     while True:
         try:
-            current = get_current_replicas(apps, DEPLOYMENT, NAMESPACE)
-            pods = get_pod_list(core, NAMESPACE, selector)
-            total_users, avg_cpu, avg_gpu = get_users_and_cpu(core, pods, APP_PORT)
-            avg_latency = get_avg_latency(core, pods, APP_PORT)
+            current = get_replicas(apps)
+            pods = list_pods(core)
 
-            u_smooth = user_ewma.update(total_users)
-            c_smooth = cpu_ewma.update(avg_cpu)
-            l_smooth = latency_ewma.update(avg_latency)
-            g_smooth = gpu_ewma.update(avg_gpu) if avg_gpu is not None else None
+            concurrent_reqs, gpu, latency = fetch_metrics(pods)
 
-            # Compute desired replicas for each metric
-            desired_u = compute_desired_by_users(int(u_smooth), current)
-            desired_c = compute_desired_by_util(c_smooth, CPU_TARGET, current)
-            desired_l = compute_desired_by_latency(l_smooth, LATENCY_TARGET_MS, current)
-            desired_g = compute_desired_by_gpu(g_smooth, current) if g_smooth is not None else current
+            gpu_s = ew_gpu.update(gpu)
+            lat_s = ew_lat.update(latency)
             
-            # Log individual metric recommendations
-            gpu_str = f"GPU: {g_smooth:.1f}% (want {desired_g} replicas)" if g_smooth is not None else "GPU: N/A"
-            logger.info("📊 METRIC ANALYSIS | %s | Users: %d (want %d replicas) | CPU: %.1f%% (want %d replicas) | Latency: %.1fms (want %d replicas)",
-                       gpu_str, int(u_smooth), desired_u, c_smooth, desired_c, l_smooth, desired_l)
+            # Update trend history
+            request_history.append(concurrent_reqs)
+            if len(request_history) > REQUEST_HISTORY_SIZE:
+                request_history.pop(0)
             
-            # GPU IS PRIMARY - it's the most expensive resource
-            # Priority: GPU > Latency > Users > CPU
-            desired = current
-            scaling_reason = "no_change"
-            
-            if g_smooth is not None and desired_g != current:
-                desired = desired_g
-                scaling_reason = "gpu"
-                logger.info("🎯 Using GPU metric (primary scaling factor)")
-            elif desired_l > desired:
-                desired = desired_l
-                scaling_reason = "latency"
-                logger.info("🔄 Using LATENCY metric")
-            elif desired_u > desired:
-                desired = desired_u
-                scaling_reason = "users"
-                logger.info("🔄 Using USERS metric")
-            elif desired_c > desired:
-                desired = desired_c
-                scaling_reason = "cpu"
-                logger.info("🔄 Using CPU metric")
-            
-            desired = max(MIN_REPLICAS, min(desired, MAX_REPLICAS))
-            
-            # Check if latency is critical
-            latency_critical = scaling_controller.check_latency_critical(l_smooth, LATENCY_TARGET_MS)
-            
-            # Determine scaling direction
-            scale_direction = 0
-            if desired > current:
-                scale_direction = 1
-            elif desired < current:
-                scale_direction = -1
-            
-            # Apply intelligent scaling with cooldown
-            if scale_direction != 0 and scaling_controller.can_scale(scale_direction, latency_critical):
-                bounded = clamp_step(current, desired, latency_critical)
-                
-                if bounded != current:
-                    body = {"spec": {"replicas": bounded}}
-                    apps.patch_namespaced_deployment_scale(DEPLOYMENT, NAMESPACE, body)
-                    scaling_controller.record_scale(scale_direction)
-                    
-                    # Determine scaling direction emoji
-                    direction_emoji = "📈" if bounded > current else "📉"
-                    gpu_status = f"GPU: {g_smooth:.1f}%" if g_smooth is not None else "GPU: N/A"
-                    
-                    logger.info("%s SCALED %s → %s (reason: %s) | %s | Users: %d | CPU: %.1f%% | Latency: %.1fms", 
-                               direction_emoji, current, bounded, scaling_reason.upper(),
-                               gpu_status, int(u_smooth), c_smooth, l_smooth)
+            if gpu_s is not None:
+                gpu_history.append(gpu_s)
+                if len(gpu_history) > GPU_HISTORY_SIZE:
+                    gpu_history.pop(0)
+
+            desired, reason = decide_scale(
+                current, gpu_s, concurrent_reqs, lat_s, 
+                last_scale_down_time, last_scale_up_time,
+                request_history, gpu_history
+            )
+
+            if desired != current:
+                scale(apps, desired)
+                action = "scale"
+                if desired < current:
+                    last_scale_down_time = time.time()
                 else:
-                    gpu_status = f"GPU: {g_smooth:.1f}%" if g_smooth is not None else "GPU: N/A"
-                    logger.info("⚠️  Scale blocked by step limits | Replicas: %s (want %s) | %s | Users: %d | CPU: %.1f%%", 
-                               current, desired, gpu_status, int(u_smooth), c_smooth)
+                    last_scale_up_time = time.time()
             else:
-                if scale_direction != 0:
-                    gpu_status = f"GPU: {g_smooth:.1f}%" if g_smooth is not None else "GPU: N/A"
-                    logger.info("⏳ Scale blocked by cooldown | Replicas: %s (want %s) | %s | Users: %d | CPU: %.1f%%", 
-                               current, desired, gpu_status, int(u_smooth), c_smooth)
-                else:
-                    gpu_status = f"GPU: {g_smooth:.1f}%" if g_smooth is not None else "GPU: N/A"
-                    logger.info("✅ No scale needed | Replicas: %s | %s | Users: %d | CPU: %.1f%% | Latency: %.1fms", 
-                               current, gpu_status, int(u_smooth), c_smooth, l_smooth)
-                               
+                action = "hold"
+
+            if CSV_LOGGING:
+                print(f"{time.time()},{current},{desired},{gpu_s},{lat_s},{concurrent_reqs},{reason}")
+
+            log.info(
+                f"ACTION={action} CUR={current} DES={desired} GPU={gpu_s:.1f}% "
+                f"LAT={lat_s:.1f}ms REQS={concurrent_reqs} REASON={reason}"
+            )
+
         except Exception as e:
-            logger.exception("Scaler loop error: %s", e)
+            log.exception(f"Loop error: {e}")
 
         time.sleep(SYNC_PERIOD)
 
